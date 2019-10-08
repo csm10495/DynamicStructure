@@ -33,9 +33,10 @@ def test_get_structure_type_no_dynamic_valid_anon():
     s = getStructureType(fieldTuple, buffer, pack=2, anonymous=['A'])
     assert s._pack_ == 2
 
-def test_get_structure_type_from_parent():
-    ''' tests getStructureType() with a parent '''
-    class Tmp(BaseStructure):
+@pytest.mark.parametrize('baseClass', [BaseStructure, Structure])
+def test_get_structure_type_from_parent(baseClass):
+    ''' tests getStructureType() with a parent (also is testing if something doesn't inherit from BaseStructure) '''
+    class Tmp(baseClass):
         _pack_ = 1
         _fields_ = [('A', c_uint32)]
 
@@ -99,3 +100,113 @@ def test_get_dynamic_structure_enough_space_alt_pack():
     assert struct.__doc__ == 'DOCSTR_TEST'
     assert struct._pack_ == 4
     assert sizeof(struct) == 8
+
+def test_get_array_of_dynamic_structures_type_not_dynamic():
+    ''' tests getArrayOfDynamicStructuresType to make sure it works with non-dynamic fields
+        Also happens to test getArrayOfDynamicStructures() while here'''
+    buffer = [a for a in range(255)]
+
+    ARRAY_LIKE_FIELDS = [
+        ('A', c_uint8),
+        ('B', c_uint8),
+    ]
+
+    typ = getArrayOfDynamicStructuresType(buffer, ARRAY_LIKE_FIELDS, maxArrayLength=3)
+    inst = typ().fill(buffer)
+    assert inst.getArrayIndex(0).A == 0
+    assert inst.getArrayIndex(0).B == 1
+    assert inst.getArrayIndex(1).A == 2
+    assert inst.getArrayIndex(1).B == 3
+    assert inst.getArrayIndex(2).A == 4
+    assert inst.getArrayIndex(2).B == 5
+
+    with pytest.raises(IndexError):
+        assert inst.getArrayIndex(3)
+
+    with pytest.raises(IndexError):
+        assert inst.getArrayIndex(-2)
+
+    assert sizeof(inst) == 6
+    assert len(inst) == 3
+
+    inst = getArrayOfDynamicStructures(buffer, ARRAY_LIKE_FIELDS, maxArrayLength=3)
+
+    assert inst.getArrayIndex(0).A == 0
+    assert inst.getArrayIndex(0).B == 1
+    assert inst.getArrayIndex(1).A == 2
+    assert inst.getArrayIndex(1).B == 3
+    assert inst.getArrayIndex(2).A == 4
+    assert inst.getArrayIndex(2).B == 5
+
+    with pytest.raises(IndexError):
+        assert inst.getArrayIndex(3)
+
+    with pytest.raises(IndexError):
+        assert inst.getArrayIndex(-2)
+
+    assert sizeof(inst) == 6
+    assert len(inst) == 3
+
+def test_get_array_of_dynamic_structures_type_dynamic():
+    ''' tests getArrayOfDynamicStructuresType to make sure it works with dynamic fields'''
+    buffer = [a for a in range(255)]
+
+    ARRAY_LIKE_FIELDS = [
+        ('NumElements', c_uint8),
+        ('Array', lambda self, buffer: c_uint8 * self.NumElements)
+    ]
+
+    typ = getArrayOfDynamicStructuresType(buffer, ARRAY_LIKE_FIELDS, maxArrayLength=3)
+    inst = typ().fill(buffer)
+    assert inst.getArrayIndex(0).NumElements == 0
+    assert len(inst.getArrayIndex(0).Array) == 0
+
+    assert inst.getArrayIndex(1).NumElements == 1
+    assert list(inst.getArrayIndex(1).Array) == [2]
+
+    assert inst.getArrayIndex(2).NumElements == 3
+    assert list(inst.getArrayIndex(2).Array) == [4, 5, 6]
+
+    with pytest.raises(IndexError):
+        assert inst.getArrayIndex(3)
+
+    with pytest.raises(IndexError):
+        assert inst.getArrayIndex(-2)
+
+    assert len(inst) == 3
+
+def test_get_array_of_dynamic_structures_type_dynamic_with_struct_pick_function():
+    ''' tests getArrayOfDynamicStructuresType to make sure it works with dynamic fields and if we give a struct pick function
+    instead of giving in a list of fields '''
+    buffer = [a for a in range(255)]
+
+    def structPickFunction(buffer):
+        if buffer[0] == 0:
+            fields = [
+                ('Field0', c_uint8),
+            ]
+
+        elif buffer[0] == 1:
+            fields = [
+                ('Field1', c_uint16),
+            ]
+
+        else:
+            return False
+
+        class TmpStructure(BaseStructure):
+            _pack_ = 1
+            _fields_ = fields
+
+        return TmpStructure
+
+    typ = getArrayOfDynamicStructuresType(buffer, structPickFunction, maxArrayLength=3)
+    inst = typ().fill(buffer)
+
+    assert inst.getArrayIndex(0).Field0 == 0
+    assert inst.getArrayIndex(1).Field1 == 0x0201
+
+    with pytest.raises(IndexError):
+        assert inst.getArrayIndex(2)
+
+    assert len(inst) == 2

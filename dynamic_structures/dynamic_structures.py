@@ -7,7 +7,6 @@ Author(s):
     Charles Machalow via the MIT License
 '''
 import inspect
-import pdb
 from ctypes import *
 
 '''
@@ -29,28 +28,28 @@ getDynamicStructure(fields=[
 ], pack=1)
 '''
 
-class BitFieldUnsupportedError(ValueError):
+class DynamicStructureError(ValueError):
+    ''' all errors raised by this stuff extends from this '''
+    pass
+
+class BitFieldUnsupportedError(DynamicStructureError):
     ''' raised in the event that a bitfield is attempted to be used in a dynamic structure '''
     pass
 
-class BufferSizeInsufficient(ValueError):
+class BufferSizeInsufficient(DynamicStructureError):
     ''' raised in the event that we don't have enough buffer space '''
     pass
 
 class BaseStructure(Structure):
     ''' simple base Structure to inherit from '''
-    def getBytes(self):
+    def _getBytes(self):
         ''' returns the bytes for this structure (by reference... sort of) '''
         return cast(byref(self), POINTER(c_uint8))
-
-    def getBytesCopy(self):
-        ''' gets a copy of the bytes for this structure '''
-        return cast(byref(self), POINTER(c_uint8))[:sizeof(self)]
 
     def fill(self, buffer):
         ''' fills this instance of the struct with the given buffer '''
         for i in range(min(len(buffer), sizeof(self))):
-            self.getBytes()[i] = buffer[i]
+            self._getBytes()[i] = buffer[i]
         return self
 
     def getAllFields(self):
@@ -102,7 +101,9 @@ def getStructureType(fieldTuple, buffer, parent=BaseStructure, pack=1, anonymous
 
         fieldTuple = type(fieldTuple)([name, calculatedDynamicType])
 
-    class TmpStructure(parent):
+    # make sure we get the fill() method.
+    thingToInheritFrom = [parent] if issubclass(parent, BaseStructure) else (parent, BaseStructure)
+    class TmpStructure(*thingToInheritFrom):
         ''' this tmp structure inherits from parent to essentially add one field '''
         _pack_ = pack
 
@@ -140,3 +141,44 @@ def getDynamicStructure(fields, buffer=None, pack=1, anonymous=None, docstring='
     '''
     structType = getDynamicStructureType(fields, buffer, pack, anonymous, docstring)
     return structType().fill(buffer)
+
+def getArrayOfDynamicStructuresType(buffer, fieldsOrStructTypePickFunction, maxArrayLength, pack=1):
+    ''' takes in a buffer, and a list of fields. The fields will make up a dynamic structure to be continually
+    used in an array-like thing of those structs. If a function is given to fieldsOrStructTypePickFunction, it
+    should take in a buffer and return a type to use at this point. It can also return False if there isn't
+    enough room to process the next element '''
+
+    curatedFieldsList = []
+    for idx in range(maxArrayLength):
+        if inspect.isfunction(fieldsOrStructTypePickFunction):
+            # function to find list of fields given
+            ds = fieldsOrStructTypePickFunction(buffer)
+            if not ds:
+                break
+        else:
+            # list of fields given.
+            ds = getDynamicStructureType(fieldsOrStructTypePickFunction, buffer=buffer, pack=pack)
+        curatedFieldsList.append(('_ArrayItem_%d' % idx, ds,))
+        buffer = buffer[sizeof(ds):]
+
+    class TmpArrayStructure(BaseStructure):
+        ''' structure that will be returned. Main user-entry point is getArrayIndex() '''
+        _pack_ = pack
+        _fields_ = curatedFieldsList
+
+        def __len__(self):
+            ''' returns number of items in this struct's array '''
+            return len(curatedFieldsList)
+
+        def getArrayIndex(self, idx):
+            ''' user-facing way to get items in the array index '''
+            if idx >= len(self) or idx < 0:
+                raise IndexError("%d is out of bounds" % idx)
+            return getattr(self, '_ArrayItem_%d' % idx)
+
+    return TmpArrayStructure
+
+def getArrayOfDynamicStructures(buffer, fieldsOrStructTypePickFunction, maxArrayLength, pack=1):
+    ''' calls getArrayOfDynamicStructuresType() then instantiates it with the buffer '''
+    s = getArrayOfDynamicStructuresType(buffer, fieldsOrStructTypePickFunction, maxArrayLength, pack)
+    return s().fill(buffer)
