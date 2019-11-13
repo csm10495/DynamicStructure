@@ -210,3 +210,20 @@ def test_get_array_of_dynamic_structures_type_dynamic_with_struct_pick_function(
         assert inst.getArrayIndex(2)
 
     assert len(inst) == 2
+
+def test_using_other_tuple_type():
+    ''' ensures that getStructureType can correctly copy over special params from a special tuple class '''
+    buffer = [a for a in range(255)]
+
+    class SpecialTuple(tuple):
+        def __init__(self, *args, **kwargs):
+            self.testField = None
+            tuple.__init__(*args, **kwargs)
+
+    s = SpecialTuple(('A', c_uint8,))
+    s.testField = 'test field'
+
+    structureType = getStructureType(s, buffer)
+    assert sizeof(structureType) == 1
+
+    assert structureType._fields_[0].testField == 'test field'

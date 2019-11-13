@@ -52,16 +52,6 @@ class BaseStructure(Structure):
             self._getBytes()[i] = buffer[i]
         return self
 
-    def getAllFields(self):
-        ''' gets all fields from the _fields_ for this and things in the
-        module resolution order (mro) for inheritence '''
-        fields = []
-        for i in type(self).mro():
-            if hasattr(i, '_fields_'):
-                fields += i._fields_
-
-        return fields[::-1]
-
 def getStructureType(fieldTuple, buffer, parent=BaseStructure, pack=1, anonymous=None):
     '''
     adds the fieldTuple to the given parent using the buffer.
@@ -99,19 +89,37 @@ def getStructureType(fieldTuple, buffer, parent=BaseStructure, pack=1, anonymous
         if len(remainderOfBuffer) < sizeof(calculatedDynamicType()):
             raise BufferSizeInsufficient("not enough remaining space to process: %s... need %d bytes, have %d bytes" % (name, sizeof(calculatedDynamicType()), len(remainderOfBuffer)))
 
-        fieldTuple = type(fieldTuple)([name, calculatedDynamicType])
+        tupleType = type(fieldTuple)
 
-    # make sure we get the fill() method.
-    thingToInheritFrom = [parent] if issubclass(parent, BaseStructure) else (parent, BaseStructure)
-    class TmpStructure(*thingToInheritFrom):
+        # handle if the tupleType __new__ wants a tuple or params as tuple fields
+        try:
+            newFieldTuple = tupleType(name, calculatedDynamicType)
+        except TypeError:
+            ''' TypeError: tuple() takes at most 1 argument (2 given) '''
+            newFieldTuple = tupleType((name, calculatedDynamicType))
+
+        # if the tupleType is inherited from tuple, bring over things that may have been on that object
+        if hasattr(newFieldTuple, '__dict__'):
+            newFieldTuple.__dict__.update(fieldTuple.__dict__)
+
+    else:
+        newFieldTuple = fieldTuple
+
+    class TmpStructure(parent):
         ''' this tmp structure inherits from parent to essentially add one field '''
         _pack_ = pack
 
         # handle anonymous (only make anonymous if this field is listed)
         _anonymous_ = [] if name not in anonymous else [name]
         _fields_ = [
-                fieldTuple
+                newFieldTuple
             ]
+
+    if not issubclass(parent, BaseStructure):
+        # make sure we inherit from BaseStructure
+        #   to get us the .fill() method.
+        class TmpStructure(TmpStructure, BaseStructure):
+            pass
 
     return TmpStructure
 
